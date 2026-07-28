@@ -41,6 +41,31 @@ for (let attempt = 1; ; attempt++) {
       hostname: HOST,
       async fetch(req) {
         const { pathname } = new URL(req.url);
+
+        // Serve generated videos from /tmp/vidspark/
+        if (pathname.startsWith("/api/video/")) {
+          const jobId = pathname.slice("/api/video/".length);
+          // Sanitise: only allow UUID-like job IDs
+          if (
+            jobId.length > 0 &&
+            jobId.length <= 64 &&
+            /^[a-zA-Z0-9\-]+$/.test(jobId)
+          ) {
+            const videoPath = `/tmp/vidspark/${jobId}/output.mp4`;
+            const file = Bun.file(videoPath);
+            if (await file.exists()) {
+              return new Response(file, {
+                headers: {
+                  "Content-Type": "video/mp4",
+                  "Content-Disposition": `attachment; filename="vidspark-${jobId.slice(0, 8)}.mp4"`,
+                  "Cache-Control": "public, max-age=3600",
+                },
+              });
+            }
+          }
+          return new Response("Video not found", { status: 404 });
+        }
+
         if (pathname !== "/") {
           const file = Bun.file(CLIENT_DIR + pathname);
           if (await file.exists()) return new Response(file);
