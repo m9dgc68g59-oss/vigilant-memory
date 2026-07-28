@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { readFile } from "node:fs/promises";
 import { useState, useCallback, useEffect, useRef } from "react";
+import { generateVideo } from "~/server/generateVideo";
 
 const getBusinessName = createServerFn({ method: "GET" }).handler(async () => {
   try {
@@ -14,7 +15,7 @@ const getBusinessName = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-type AppState = "idle" | "generating" | "done";
+type AppState = "idle" | "generating" | "done" | "error";
 type Format = "16:9" | "9:16";
 
 export const Route = createFileRoute("/")({
@@ -31,14 +32,26 @@ function Home() {
   const [format, setFormat] = useState<Format>("16:9");
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
   const [isMac, setIsMac] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setIsMac(typeof navigator !== "undefined" && navigator.platform?.includes("Mac"));
+    setIsMac(
+      typeof navigator !== "undefined" && navigator.platform?.includes("Mac"),
+    );
   }, []);
 
-  const handleGenerate = useCallback(() => {
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) {
       setErrorMsg("Please enter a prompt first.");
       return;
@@ -46,38 +59,69 @@ function Home() {
     setErrorMsg("");
     setState("generating");
     setProgress(0);
+    setVideoUrl("");
 
-    // Simulate progress over 3 seconds
+    // Start simulated progress (fills to ~90% while we wait)
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     intervalRef.current = setInterval(() => {
       setProgress((prev) => {
-        if (prev >= 100) {
+        if (prev >= 90) {
           if (intervalRef.current) clearInterval(intervalRef.current);
-          return 100;
+          return 90;
         }
-        return prev + 4;
+        // Slow down as we approach 90%
+        const increment = prev < 40 ? 3 : prev < 70 ? 1.5 : 0.7;
+        return Math.min(prev + increment, 90);
       });
-    }, 120);
+    }, 200);
 
-    // After 3 seconds, show done state
-    setTimeout(() => {
+    try {
+      const result = await generateVideo({
+        data: { prompt: prompt.trim(), format },
+      });
+
       if (intervalRef.current) clearInterval(intervalRef.current);
       setProgress(100);
+
+      // Short delay so user sees 100% before the video appears
+      await new Promise((r) => setTimeout(r, 400));
+
+      setVideoUrl(result.videoUrl);
       setState("done");
-    }, 3000);
-  }, [prompt]);
+    } catch (err) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+
+      const message =
+        err instanceof Error ? err.message : "An unexpected error occurred";
+      setErrorMsg(message);
+      setState("error");
+    }
+  }, [prompt, format]);
 
   const handleTryAgain = useCallback(() => {
+    abortRef.current?.abort();
     setState("idle");
     setProgress(0);
     setErrorMsg("");
+    setVideoUrl("");
+    if (intervalRef.current) clearInterval(intervalRef.current);
   }, []);
 
-  // Cleanup interval on unmount
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
+  const handleDownload = useCallback(() => {
+    if (!videoUrl) return;
+    const a = document.createElement("a");
+    a.href = videoUrl;
+    a.download = `vidspark-${Date.now()}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [videoUrl]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -301,32 +345,30 @@ function Home() {
                 Prompt: &ldquo;{prompt}&rdquo; &middot; Format: {format}
               </p>
 
-              {/* Video placeholder */}
+              {/* Video player */}
               <div className="mb-6 overflow-hidden rounded-xl border border-gray-700 bg-black">
                 <div
                   className={`relative w-full bg-gray-900 ${
-                    format === "9:16" ? "aspect-[9/16] max-w-sm mx-auto" : "aspect-video"
+                    format === "9:16"
+                      ? "aspect-[9/16] max-w-sm mx-auto"
+                      : "aspect-video"
                   }`}
                 >
-                  {/* Placeholder video element */}
-                  <video
-                    className="h-full w-full"
-                    poster={`data:image/svg+xml,${encodeURIComponent(
-                      `<svg xmlns="http://www.w3.org/2000/svg" width="${
-                        format === "9:16" ? "360" : "640"
-                      }" height="${
-                        format === "9:16" ? "640" : "360"
-                      }" viewBox="0 0 ${format === "9:16" ? "360 640" : "640 360"}">
-                        <rect fill="#1a1a2e" width="100%" height="100%"/>
-                        <text fill="#6366f1" font-size="20" font-family="sans-serif" text-anchor="middle" x="50%" y="48%">🎬 Video Preview</text>
-                        <text fill="#6b7280" font-size="14" font-family="sans-serif" text-anchor="middle" x="50%" y="56%">Generated with AI</text>
-                      </svg>`
-                    )}`}
-                    controls
-                    preload="none"
-                  >
-                    <source src="" type="video/mp4" />
-                  </video>
+                  {videoUrl ? (
+                    <video
+                      className="h-full w-full"
+                      src={videoUrl}
+                      controls
+                      autoPlay
+                      playsInline
+                    >
+                      <source src={videoUrl} type="video/mp4" />
+                    </video>
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-gray-500">
+                      Loading video...
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -334,13 +376,7 @@ function Home() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    // Placeholder — will be wired to actual download
-                    const a = document.createElement("a");
-                    a.href = "#";
-                    a.download = `vidspark-${Date.now()}.mp4`;
-                    a.click();
-                  }}
+                  onClick={handleDownload}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-3 font-semibold text-white shadow-lg shadow-purple-600/30 transition-all hover:from-purple-500 hover:to-indigo-500 active:scale-[0.98]"
                 >
                   <svg
@@ -366,6 +402,44 @@ function Home() {
                   Try Again
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Error state */}
+          {state === "error" && (
+            <div className="animate-fadeIn rounded-2xl border border-red-800/50 bg-gray-900/80 p-8 shadow-2xl shadow-black/30 backdrop-blur">
+              <div className="mb-6 flex justify-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10 ring-1 ring-red-500/30">
+                  <svg
+                    className="h-7 w-7 text-red-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+                    />
+                  </svg>
+                </div>
+              </div>
+
+              <h2 className="mb-2 text-center text-xl font-bold text-red-300">
+                Generation failed
+              </h2>
+              <p className="mb-6 text-center text-sm text-gray-400">
+                {errorMsg}
+              </p>
+
+              <button
+                type="button"
+                onClick={handleTryAgain}
+                className="w-full rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-3.5 text-lg font-semibold text-white shadow-lg shadow-purple-600/30 transition-all hover:from-purple-500 hover:to-indigo-500 active:scale-[0.98]"
+              >
+                Try Again
+              </button>
             </div>
           )}
         </div>
