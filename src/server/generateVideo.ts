@@ -54,7 +54,7 @@ async function generateImage(
 
   const resp = await fetch(STABILITY_URL, {
     method: "POST",
-    headers: { Authorization: `Bearer ${STABILITY_API_KEY}` },
+    headers: { Authorization: `Bearer ${STABILITY_API_KEY}`, Accept: "image/*" },
     body: form,
   });
 
