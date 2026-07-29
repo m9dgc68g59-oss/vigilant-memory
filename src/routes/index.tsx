@@ -290,36 +290,24 @@ function Home() {
           {state === "generating" && (
             <div className="animate-fadeIn rounded-2xl border border-gray-800 bg-gray-900/80 p-8 shadow-2xl shadow-black/30 backdrop-blur">
               <div className="mb-8 flex justify-center">
-                <div className="flex h-16 w-16 items-center justify-center">
-                  <svg
-                    className="h-10 w-10 animate-spin text-purple-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      className="opacity-25"
+                <div className="flex items-center gap-2">
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className="h-3 w-3 rounded-full bg-purple-400"
+                      style={{
+                        animation: `pulseDot 1.2s ease-in-out ${i * 0.15}s infinite`,
+                      }}
                     />
-                    <path
-                      d="M12 2a10 10 0 019.95 9"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                      className="opacity-75"
-                    />
-                  </svg>
+                  ))}
                 </div>
               </div>
 
               <h2 className="mb-2 text-center text-xl font-bold">
-                Generating your video...
+                Creating your video...
               </h2>
               <p className="mb-6 text-center text-sm text-gray-400">
-                Creating images and assembling your video
+                Generating images and assembling your video
               </p>
 
               {/* Progress bar */}

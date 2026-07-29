@@ -12,10 +12,11 @@ const STABILITY_URL =
   "https://api.stability.ai/v2beta/stable-image/generate/core";
 const TEMP_ROOT = "/tmp/vidspark";
 const JOB_TTL_MS = 60 * 60 * 1000;
-const IMAGE_COUNT = 4;
-const SECONDS_PER_IMAGE = 2.5;
-const FADE_DURATION = 0.5;
+const IMAGE_COUNT = 10;
+const SECONDS_PER_IMAGE = 1.2;
+const FADE_DURATION = 0.25;
 const FPS = 24;
+const FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,23 +75,39 @@ async function stitchVideo(
   outputPath: string,
   width: number,
   height: number,
+  prompt: string,
+  promptFilePath: string,
 ): Promise<void> {
   const totalDuration =
     IMAGE_COUNT * SECONDS_PER_IMAGE - (IMAGE_COUNT - 1) * FADE_DURATION;
   const framesPerImage = Math.round(SECONDS_PER_IMAGE * FPS);
 
+  // Font size scales with resolution: (w+h)/48 gives ~62px for both 16:9 and 9:16
+  const fontSize = Math.round((width + height) / 48);
+  // Horizontal pan amplitude proportional to width
+  const panAmplitude = Math.round(width * 0.015);
+
   const filterParts: string[] = [];
 
+  // Step 1: Apply Ken Burns (zoom + parallax pan) to each image
   for (let i = 0; i < IMAGE_COUNT; i++) {
+    const zoomIn = i % 2 === 0; // alternate zoom-in / zoom-out
+    const zoomExpr = zoomIn
+      ? `min(zoom+0.012,1.35)`
+      : `if(eq(on,0),1.35,max(zoom-0.012,1))`;
+
+    // x: center + horizontal sine-wave sway
+    // y: center + subtle vertical cosine-wave wobble
     filterParts.push(
-      `[${i}:v]zoompan=z='min(zoom+0.0015,1.25)':d=${framesPerImage}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height}:fps=${FPS},setpts=PTS-STARTPTS[v${i}]`,
+      `[${i}:v]zoompan=z='${zoomExpr}':d=${framesPerImage}:x='iw/2-(iw/zoom/2)+sin(on*0.08)*${panAmplitude}':y='ih/2-(ih/zoom/2)+cos(on*0.06)*${height / 80}':s=${width}x${height}:fps=${FPS},setpts=PTS-STARTPTS[v${i}]`,
     );
   }
 
+  // Step 2: Crossfade chain
   let prevLabel = "v0";
   let offset = SECONDS_PER_IMAGE;
   for (let i = 1; i < IMAGE_COUNT; i++) {
-    const nextLabel = i === IMAGE_COUNT - 1 ? "outv" : `x${i}`;
+    const nextLabel = i === IMAGE_COUNT - 1 ? "xfdone" : `x${i}`;
     filterParts.push(
       `[${prevLabel}][v${i}]xfade=transition=fade:duration=${FADE_DURATION}:offset=${offset}[${nextLabel}]`,
     );
@@ -98,7 +115,15 @@ async function stitchVideo(
     offset += SECONDS_PER_IMAGE;
   }
 
-  const audioPart = `[${IMAGE_COUNT}:a][${IMAGE_COUNT + 1}:a]amix=inputs=2:duration=first,volume=0.12,afade=t=in:d=1,afade=t=out:st=${totalDuration - 1}:d=1[a_out]`;
+  // Step 3: Post-processing chain — motion blur, text overlay, vignette, saturation
+  filterParts.push(
+    `[xfdone]tmix=frames=2:weights='1 1',drawtext=textfile='${promptFilePath}':fontfile=${FONT_PATH}:fontsize=${fontSize}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=12:x=(w-text_w)/2:y=h-text_h-${Math.round(height * 0.04)}:alpha='if(lt(t,0.6),t/0.6,1)',vignette=PI/4,eq=saturation=1.3[outv]`,
+  );
+
+  // Step 4: Audio — layered sine waves for rich ambient tone
+  // Inputs: [0:v]..[9:v] for images, [10:a]..[13:a] for sine waves
+  const audioPart = `[${IMAGE_COUNT}:a][${IMAGE_COUNT + 1}:a][${IMAGE_COUNT + 2}:a][${IMAGE_COUNT + 3}:a]amix=inputs=4:duration=first,volume=0.07,afade=t=in:d=0.5,afade=t=out:st=${totalDuration - 0.5}:d=0.5[a_out]`;
+
   const fullFilter = filterParts.join(";") + ";" + audioPart;
 
   const finalArgs: string[] = [
@@ -118,6 +143,14 @@ async function stitchVideo(
     "lavfi",
     "-i",
     `sine=frequency=330:duration=${totalDuration}`,
+    "-f",
+    "lavfi",
+    "-i",
+    `sine=frequency=440:duration=${totalDuration}`,
+    "-f",
+    "lavfi",
+    "-i",
+    `sine=frequency=550:duration=${totalDuration}`,
     "-filter_complex",
     fullFilter,
     "-map",
@@ -199,6 +232,10 @@ export const generateVideo = createServerFn({ method: "POST" })
     // Fire-and-forget cleanup
     cleanupOldJobs().catch(() => {});
 
+    // Write prompt to a temp file for drawtext (avoids FFmpeg escaping issues)
+    const promptFilePath = join(jobDir, "prompt.txt");
+    await writeFile(promptFilePath, prompt, "utf-8");
+
     // Generate images
     const imagePaths: string[] = [];
     for (let i = 0; i < IMAGE_COUNT; i++) {
@@ -211,7 +248,7 @@ export const generateVideo = createServerFn({ method: "POST" })
     // Stitch video
     const [w, h] = format === "16:9" ? [1920, 1080] : [1080, 1920];
     const outputPath = join(jobDir, "output.mp4");
-    await stitchVideo(imagePaths, outputPath, w, h);
+    await stitchVideo(imagePaths, outputPath, w, h, prompt, promptFilePath);
 
     return {
       jobId,
