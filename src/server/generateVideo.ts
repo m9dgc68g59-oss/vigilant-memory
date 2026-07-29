@@ -98,7 +98,7 @@ async function stitchVideo(
     offset += SECONDS_PER_IMAGE;
   }
 
-  const audioPart = `[0:a][1:a]amix=inputs=2:duration=first,volume=0.12,afade=t=in:d=1,afade=t=out:st=${totalDuration - 1}:d=1[a_out]`;
+  const audioPart = `[${IMAGE_COUNT}:a][${IMAGE_COUNT + 1}:a]amix=inputs=2:duration=first,volume=0.12,afade=t=in:d=1,afade=t=out:st=${totalDuration - 1}:d=1[a_out]`;
   const fullFilter = filterParts.join(";") + ";" + audioPart;
 
   const finalArgs: string[] = [
