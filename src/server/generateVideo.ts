@@ -12,7 +12,7 @@ const STABILITY_URL =
   "https://api.stability.ai/v2beta/stable-image/generate/core";
 const TEMP_ROOT = "/tmp/vidspark";
 const JOB_TTL_MS = 60 * 60 * 1000;
-const IMAGE_COUNT = 10;
+const IMAGE_COUNT = 6;
 const SECONDS_PER_IMAGE = 1.2;
 const FADE_DURATION = 0.25;
 const FPS = 24;
